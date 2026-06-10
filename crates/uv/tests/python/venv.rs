@@ -75,74 +75,6 @@ fn create_venv() {
 }
 
 #[test]
-fn create_venv_centralized_project_envs_warning() -> Result<()> {
-    let context = uv_test::test_context_with_versions!(&["3.12"]);
-
-    // The feature is project-scoped, so it does not warn outside a project.
-    uv_snapshot!(context.filters(), context.venv()
-        .arg("--preview-features")
-        .arg("centralized-project-envs")
-        .arg("--python")
-        .arg("3.12"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    fs_err::remove_dir_all(&context.venv)?;
-    context
-        .temp_dir
-        .child("pyproject.toml")
-        .write_str(indoc! {r#"
-        [project]
-        name = "project"
-        version = "0.1.0"
-    "#})?;
-
-    uv_snapshot!(context.filters(), context.venv()
-        .arg("--preview-features")
-        .arg("centralized-project-envs")
-        .arg("--python")
-        .arg("3.12"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-    ----- stderr -----
-    warning: The `centralized-project-envs` preview feature currently has no effect on `uv venv`
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: .venv
-    Activate with: source .venv/[BIN]/activate
-    "
-    );
-
-    uv_snapshot!(context.filters(), context.venv()
-        .env(EnvVars::UV_PROJECT_ENVIRONMENT, "explicit")
-        .arg("--preview-features")
-        .arg("centralized-project-envs")
-        .arg("--python")
-        .arg("3.12"), @"
-    success: true
-    exit_code: 0
-    ----- stdout -----
-
-    ----- stderr -----
-    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
-    Creating virtual environment at: explicit
-    Activate with: source explicit/[BIN]/activate
-    "
-    );
-
-    Ok(())
-}
-
-#[test]
 fn create_venv_313() {
     let context = uv_test::test_context_with_versions!(&["3.13"]);
 
@@ -169,7 +101,10 @@ fn create_venv_project_environment() -> Result<()> {
     let context = uv_test::test_context_with_versions!(&["3.12"]);
 
     // `uv venv` ignores `UV_PROJECT_ENVIRONMENT` when it's not a project
-    uv_snapshot!(context.filters(), context.venv().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
+    uv_snapshot!(context.filters(), context.venv()
+        .env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @"
     success: true
     exit_code: 0
     ----- stdout -----
@@ -182,6 +117,7 @@ fn create_venv_project_environment() -> Result<()> {
     );
 
     context.venv.assert(predicates::path::is_dir());
+    assert!(fs_err::read_link(context.venv.path()).is_err());
     context
         .temp_dir
         .child("foo")
@@ -199,7 +135,10 @@ fn create_venv_project_environment() -> Result<()> {
     )?;
 
     // But, if we're in a project we'll respect it
-    uv_snapshot!(context.filters(), context.venv().env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo"), @"
+    uv_snapshot!(context.filters(), context.venv()
+        .env(EnvVars::UV_PROJECT_ENVIRONMENT, "foo")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @"
     success: true
     exit_code: 0
     ----- stdout -----
@@ -236,8 +175,12 @@ fn create_venv_project_environment() -> Result<()> {
     child.child("foo").assert(predicates::path::missing());
     child.child(".venv").assert(predicates::path::is_dir());
 
-    // Or, if a name is provided
-    uv_snapshot!(context.filters(), context.venv().arg("bar"), @"
+    // Or, if a name is provided, even with centralized environments and `--no-cache`.
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("bar")
+        .arg("--no-cache")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @"
     success: true
     exit_code: 0
     ----- stdout -----
@@ -329,6 +272,260 @@ async fn create_venv_project_environment_lock() -> Result<()> {
         .child("foo")
         .assert(predicates::path::is_dir());
 
+    Ok(())
+}
+
+#[test]
+fn create_centralized_project_environment() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_centralized_environment_hashes();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    // Start with a local environment exposed through a directory link.
+    let external = context.temp_dir.child("external");
+    context.venv().arg(external.path()).assert().success();
+    external.child("marker").touch()?;
+    uv_fs::create_symlink(external.path(), context.temp_dir.child(".venv").path())?;
+
+    // Migrate to centralized storage without removing the linked environment.
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment `project-cp3.12.[X]-[HASH]`
+    Activate with: source .venv/[BIN]/activate
+    "#);
+
+    let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
+    assert_eq!(
+        target.parent(),
+        Some(context.cache_dir.child("environments-v2").path())
+    );
+    assert!(target.join("pyvenv.cfg").is_file());
+    assert!(external.child("marker").is_file());
+
+    let marker = context.temp_dir.child(".venv").child("marker");
+    marker.touch()?;
+
+    // `--allow-existing` preserves the contents of the centralized environment.
+    context
+        .venv()
+        .arg("--allow-existing")
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .assert()
+        .success();
+    assert_eq!(
+        target,
+        fs_err::read_link(context.temp_dir.child(".venv").path())?
+    );
+    assert!(marker.exists());
+
+    // Preserve an existing centralized environment with `--no-clear`.
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--no-clear")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @r#"
+    success: false
+    exit_code: 2
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment `project-cp3.12.[X]-[HASH]`
+    error: Failed to create virtual environment
+      Caused by: A virtual environment already exists at: [CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]
+
+    hint: Use the `--clear` flag or set `UV_VENV_CLEAR=1` to replace the existing virtual environment
+    "#);
+
+    assert_eq!(
+        target,
+        fs_err::read_link(context.temp_dir.child(".venv").path())?
+    );
+    assert!(marker.exists());
+
+    let environment = context.temp_dir.child(".venv");
+    let cache_marker = target.join("marker");
+    assert!(cache_marker.is_file());
+
+    // Without the preview, `--allow-existing` operates on the environment through the link.
+    context.venv().arg("--allow-existing").assert().success();
+    assert_eq!(target, fs_err::read_link(environment.path())?);
+    assert!(cache_marker.is_file());
+
+    // Without the preview, `--clear` replaces `.venv` locally without clearing its cached target.
+    context.venv().arg("--clear").assert().success();
+
+    assert!(fs_err::read_link(environment.path()).is_err());
+    assert!(cache_marker.is_file());
+    let local_marker = environment.child("local-marker");
+    local_marker.touch()?;
+
+    // `--allow-existing` cannot preserve the local environment while publishing a link.
+    context
+        .venv()
+        .arg("--allow-existing")
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .assert()
+        .failure();
+    assert!(local_marker.is_file());
+    assert!(cache_marker.is_file());
+
+    // Turning the feature back on replaces the local environment and recreates the cached one.
+    context
+        .venv()
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .assert()
+        .success();
+
+    assert_eq!(target, fs_err::read_link(environment.path())?);
+    assert!(!local_marker.exists());
+    assert!(!cache_marker.exists());
+    Ok(())
+}
+
+#[test]
+fn create_centralized_project_environment_link_failure() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_centralized_environment_hashes()
+        .with_filter((
+            r"(?m)^(warning: Failed to create link to project environment at `[^`]+`): .*$",
+            "$1: [ERR]",
+        ));
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+    let environment = context.temp_dir.child(".venv");
+    environment.create_dir_all()?;
+    environment.child("keep").touch()?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment `project-cp3.12.[X]-[HASH]`
+    warning: Failed to create link to project environment at `.venv`: [ERR]
+    Activate with: source [CACHE_DIR]/environments-v2/project-cp3.12.[X]-[HASH]/[BIN]/activate
+    "#);
+
+    assert!(environment.child("keep").is_file());
+    Ok(())
+}
+
+#[test]
+fn create_centralized_project_environment_no_cache() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"]);
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--no-cache")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    warning: The `centralized-project-envs` feature has no effect when `--no-cache` is enabled
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment at: .venv
+    Activate with: source .venv/[BIN]/activate
+    "#);
+
+    assert!(context.temp_dir.child(".venv").is_dir());
+    assert!(fs_err::read_link(context.temp_dir.child(".venv").path()).is_err());
+    Ok(())
+}
+
+#[test]
+#[cfg(feature = "test-pypi")]
+fn create_centralized_project_environment_with_seed_packages() -> Result<()> {
+    let context = uv_test::test_context_with_versions!(&["3.12"])
+        .with_filtered_centralized_environment_hashes();
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! {r#"
+        [project]
+        name = "project"
+        version = "0.1.0"
+        requires-python = ">=3.12"
+        dependencies = []
+    "#})?;
+
+    uv_snapshot!(context.filters(), context.venv()
+        .arg("--seed")
+        .arg("--preview-features")
+        .arg("centralized-project-envs"), @r#"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+
+    ----- stderr -----
+    Using CPython 3.12.[X] interpreter at: [PYTHON-3.12]
+    Creating virtual environment `project-cp3.12.[X]-[HASH]` with seed packages
+     + pip==24.0
+    Activate with: source .venv/[BIN]/activate
+    "#);
+
+    let target = fs_err::read_link(context.temp_dir.child(".venv").path())?;
+    assert!(target.join("pyvenv.cfg").is_file());
+
+    // Seed the existing environment without clearing its contents.
+    let marker = target.join("marker");
+    fs_err::write(&marker, "")?;
+    context
+        .venv()
+        .arg("--seed")
+        .arg("--allow-existing")
+        .arg("--preview-features")
+        .arg("centralized-project-envs")
+        .assert()
+        .success();
+
+    assert_eq!(
+        target,
+        fs_err::read_link(context.temp_dir.child(".venv").path())?
+    );
+    assert!(marker.is_file());
     Ok(())
 }
 

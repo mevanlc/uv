@@ -597,7 +597,7 @@ pub(crate) fn create(
 /// Prompt a confirmation that the virtual environment should be cleared.
 ///
 /// If not a TTY, returns `None`.
-fn confirm_clear(location: &Path, name: &'static str) -> Result<Option<bool>, io::Error> {
+pub fn confirm_clear(location: &Path, name: &'static str) -> Result<Option<bool>, io::Error> {
     let term = Term::stderr();
     if term.is_term() {
         let prompt = format!(

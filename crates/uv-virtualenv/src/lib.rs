@@ -6,7 +6,7 @@ use thiserror::Error;
 use uv_fs::Simplified;
 use uv_python::{Interpreter, PythonEnvironment};
 
-pub use virtualenv::{ClearNonVirtualenv, OnExisting, RemovalReason};
+pub use virtualenv::{ClearNonVirtualenv, OnExisting, RemovalReason, confirm_clear};
 
 mod virtualenv;
 
