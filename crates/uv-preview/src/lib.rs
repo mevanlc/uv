@@ -258,6 +258,7 @@ pub enum PreviewFeature {
     VenvSafeClear = 1 << 32,
     Check = 1 << 33,
     PackagedInit = 1 << 34,
+    ToolInstallLocks = 1 << 35,
 }
 
 impl PreviewFeature {
@@ -299,6 +300,7 @@ impl PreviewFeature {
             Self::VenvSafeClear => "venv-safe-clear",
             Self::Check => "check-command",
             Self::PackagedInit => "packaged-init",
+            Self::ToolInstallLocks => "tool-install-locks",
         }
     }
 }
@@ -353,6 +355,7 @@ impl FromStr for PreviewFeature {
             "venv-safe-clear" => Self::VenvSafeClear,
             "check" | "check-command" => Self::Check,
             "packaged-init" => Self::PackagedInit,
+            "tool-install-locks" => Self::ToolInstallLocks,
             _ => return Err(PreviewFeatureParseError),
         })
     }
@@ -532,6 +535,9 @@ mod tests {
         assert!(preview.is_enabled(PreviewFeature::JsonOutput));
         assert_eq!(preview.flags.bits().count_ones(), 2);
 
+        let preview = Preview::from_str("tool-install-locks").unwrap();
+        assert!(preview.is_enabled(PreviewFeature::ToolInstallLocks));
+
         // Test with whitespace
         let preview = Preview::from_str("pylock , add-bounds").unwrap();
         assert!(preview.is_enabled(PreviewFeature::Pylock));
@@ -578,6 +584,10 @@ mod tests {
         assert_eq!(PreviewFeature::PythonUpgrade.as_str(), "python-upgrade");
         assert_eq!(PreviewFeature::JsonOutput.as_str(), "json-output");
         assert_eq!(PreviewFeature::Pylock.as_str(), "pylock");
+        assert_eq!(
+            PreviewFeature::ToolInstallLocks.as_str(),
+            "tool-install-locks"
+        );
         assert_eq!(PreviewFeature::AddBounds.as_str(), "add-bounds");
         assert_eq!(
             PreviewFeature::PackageConflicts.as_str(),

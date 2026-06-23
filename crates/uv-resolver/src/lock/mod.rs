@@ -254,7 +254,7 @@ pub(crate) struct HashedDist {
     hashes: HashDigests,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(try_from = "LockWire")]
 pub struct Lock {
     /// The (major) version of the lockfile format.
@@ -303,6 +303,29 @@ pub struct Lock {
     manifest: ResolverManifest,
     /// The tool-lock format version, if this is a standalone tool lock.
     tool_lock_version: Option<u32>,
+}
+
+impl Debug for Lock {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        // Keep the debug representation of project locks stable while surfacing the standalone
+        // tool format when it is present.
+        let mut lock = formatter.debug_struct("Lock");
+        lock.field("version", &self.version)
+            .field("revision", &self.revision)
+            .field("fork_markers", &self.fork_markers)
+            .field("conflicts", &self.conflicts)
+            .field("supported_environments", &self.supported_environments)
+            .field("required_environments", &self.required_environments)
+            .field("requires_python", &self.requires_python)
+            .field("options", &self.options)
+            .field("packages", &self.packages)
+            .field("by_id", &self.by_id)
+            .field("manifest", &self.manifest);
+        if let Some(tool_lock_version) = self.tool_lock_version {
+            lock.field("tool_lock_version", &tool_lock_version);
+        }
+        lock.finish()
+    }
 }
 
 impl Lock {
@@ -676,11 +699,6 @@ impl Lock {
     /// Return whether this lock supports universal tool resolution.
     pub fn supports_universal_tool_resolution(&self) -> bool {
         self.tool_lock_version == Some(1)
-    }
-
-    /// Return whether this lock was generated with the given [`ResolverManifest`].
-    pub fn matches_manifest(&self, manifest: &ResolverManifest) -> bool {
-        self.manifest == *manifest
     }
 
     /// Return whether this lock was generated with the given [`ResolverManifest`], resolving local
