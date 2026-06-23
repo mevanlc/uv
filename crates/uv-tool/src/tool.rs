@@ -9,7 +9,6 @@ use uv_fs::{PortablePath, Simplified};
 use uv_normalize::PackageName;
 use uv_pypi_types::VerbatimParsedUrl;
 use uv_python::PythonRequest;
-use uv_resolver::Lock;
 use uv_settings::{ToolOptions, ToolOptionsWire};
 
 /// A tool entry.
@@ -35,8 +34,6 @@ pub struct Tool {
     entrypoints: Vec<ToolEntrypoint>,
     /// The [`ToolOptions`] used to install this tool.
     options: ToolOptions,
-    /// The resolved lock for the installed environment, if available.
-    lock: Option<Lock>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -107,7 +104,6 @@ impl TryFrom<ToolWire> for Tool {
             python: tool.python,
             entrypoints: tool.entrypoints,
             options: tool.options.into(),
-            lock: None,
         })
     }
 }
@@ -184,7 +180,6 @@ impl Tool {
         python: Option<PythonRequest>,
         entrypoints: impl IntoIterator<Item = ToolEntrypoint>,
         options: ToolOptions,
-        lock: Option<Lock>,
     ) -> Self {
         let mut entrypoints: Vec<_> = entrypoints.into_iter().collect();
         entrypoints.sort();
@@ -197,7 +192,6 @@ impl Tool {
             python,
             entrypoints,
             options,
-            lock,
         }
     }
 
@@ -205,12 +199,6 @@ impl Tool {
     #[must_use]
     pub fn with_options(self, options: ToolOptions) -> Self {
         Self { options, ..self }
-    }
-
-    /// Create a new [`Tool`] with the given lock.
-    #[must_use]
-    pub fn with_lock(self, lock: Option<Lock>) -> Self {
-        Self { lock, ..self }
     }
 
     /// Returns the TOML table for this tool.
@@ -393,10 +381,6 @@ impl Tool {
 
     pub fn options(&self) -> &ToolOptions {
         &self.options
-    }
-
-    pub fn lock(&self) -> Option<&Lock> {
-        self.lock.as_ref()
     }
 }
 

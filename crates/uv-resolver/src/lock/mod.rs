@@ -254,7 +254,7 @@ pub(crate) struct HashedDist {
     hashes: HashDigests,
 }
 
-#[derive(Clone, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Deserialize)]
 #[serde(try_from = "LockWire")]
 pub struct Lock {
     /// The (major) version of the lockfile format.
@@ -301,31 +301,6 @@ pub struct Lock {
     by_id: FxHashMap<PackageId, usize>,
     /// The input requirements to the resolution.
     manifest: ResolverManifest,
-    /// The tool-lock format version, if this is a standalone tool lock.
-    tool_lock_version: Option<u32>,
-}
-
-impl Debug for Lock {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        // Keep the debug representation of project locks stable while surfacing the standalone
-        // tool format when it is present.
-        let mut lock = formatter.debug_struct("Lock");
-        lock.field("version", &self.version)
-            .field("revision", &self.revision)
-            .field("fork_markers", &self.fork_markers)
-            .field("conflicts", &self.conflicts)
-            .field("supported_environments", &self.supported_environments)
-            .field("required_environments", &self.required_environments)
-            .field("requires_python", &self.requires_python)
-            .field("options", &self.options)
-            .field("packages", &self.packages)
-            .field("by_id", &self.by_id)
-            .field("manifest", &self.manifest);
-        if let Some(tool_lock_version) = self.tool_lock_version {
-            lock.field("tool_lock_version", &tool_lock_version);
-        }
-        lock.finish()
-    }
 }
 
 impl Lock {
@@ -677,7 +652,6 @@ impl Lock {
             packages,
             by_id,
             manifest,
-            tool_lock_version: None,
         };
         Ok(lock)
     }
@@ -687,18 +661,6 @@ impl Lock {
     pub fn with_manifest(mut self, manifest: ResolverManifest) -> Self {
         self.manifest = manifest;
         self
-    }
-
-    /// Mark this lock as a universal standalone tool lock.
-    #[must_use]
-    pub fn with_universal_tool_resolution(mut self) -> Self {
-        self.tool_lock_version = Some(1);
-        self
-    }
-
-    /// Return whether this lock supports universal tool resolution.
-    pub fn supports_universal_tool_resolution(&self) -> bool {
-        self.tool_lock_version == Some(1)
     }
 
     /// Return whether this lock was generated with the given [`ResolverManifest`], resolving local
@@ -1161,10 +1123,6 @@ impl Lock {
         }
 
         doc.insert("requires-python", value(self.requires_python.to_string()));
-
-        if let Some(tool_lock_version) = self.tool_lock_version {
-            doc.insert("tool-lock-version", value(i64::from(tool_lock_version)));
-        }
 
         if !self.fork_markers.is_empty() {
             let fork_markers = each_element_on_its_line_array(
@@ -2739,8 +2697,6 @@ struct LockWire {
     version: u32,
     revision: Option<u32>,
     requires_python: RequiresPython,
-    #[serde(default)]
-    tool_lock_version: Option<u32>,
     /// If this lockfile was built from a forking resolution with non-identical forks, store the
     /// forks in the lockfile so we can recreate them in subsequent resolutions.
     #[serde(rename = "resolution-markers", default)]
@@ -2806,7 +2762,7 @@ impl TryFrom<LockWire> for Lock {
         if options.exclude_newer.exclude_newer_span.is_some() {
             options.exclude_newer.exclude_newer = None;
         }
-        let mut lock = Self::new(
+        Self::new(
             wire.version,
             wire.revision.unwrap_or(0),
             packages,
@@ -2817,11 +2773,7 @@ impl TryFrom<LockWire> for Lock {
             supported_environments,
             required_environments,
             fork_markers,
-        )?;
-
-        lock.tool_lock_version = wire.tool_lock_version;
-
-        Ok(lock)
+        )
     }
 }
 
