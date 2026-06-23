@@ -547,7 +547,7 @@ impl PlatformState {
     }
 
     /// Create a [`SharedState`] from the [`PlatformState`].
-    fn into_inner(self) -> SharedState {
+    pub(crate) fn into_inner(self) -> SharedState {
         self.0
     }
 }
