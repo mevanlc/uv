@@ -3053,6 +3053,7 @@ fn preview_features() {
     +            VenvSafeClear,
     +            Check,
     +            PackagedInit,
+    +            ToolInstallLocks,
     +        ],
          },
          python_preference: Managed,
