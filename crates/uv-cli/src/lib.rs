@@ -7121,6 +7121,10 @@ pub enum AuthHelperCommand {
 
 #[derive(Args)]
 pub struct GenerateShellCompletionArgs {
+    /// Generate a dynamic completion script that calls back into uv for context-aware candidates.
+    #[arg(long)]
+    pub dynamic: bool,
+
     /// The shell to generate the completion script for
     pub shell: clap_complete_command::Shell,
 

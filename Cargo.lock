@@ -810,6 +810,9 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "19c9f1dde76b736e3681f28cec9d5a61299cbaae0fce80a68e43724ad56031eb"
 dependencies = [
  "clap",
+ "clap_lex",
+ "is_executable",
+ "shlex",
 ]
 
 [[package]]
@@ -2352,6 +2355,15 @@ name = "is_ci"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7655c9839580ee829dfacba1d1278c2b7883e50a277ff7541299489d6bdfdc45"
+
+[[package]]
+name = "is_executable"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82cb6a9f675da968c63b6208c641b9dca58fc0133ae53375736b1767b0cab8bd"
+dependencies = [
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -4916,7 +4928,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.3",
+ "getrandom 0.4.1",
  "once_cell",
  "rustix",
  "windows-sys 0.52.0",
@@ -5684,6 +5696,8 @@ dependencies = [
  "byteorder",
  "bytes",
  "clap",
+ "clap_complete",
+ "clap_complete_command",
  "console",
  "ctrlc",
  "diskus",

@@ -284,6 +284,53 @@ fn run_no_args() -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+#[test]
+fn run_dynamic_completion_lists_existing_environment_scripts() -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let context = uv_test::test_context_with_versions!(&[]);
+
+    context
+        .temp_dir
+        .child("pyproject.toml")
+        .write_str(indoc! { r#"
+        [project]
+        name = "foo"
+        version = "1.0.0"
+        requires-python = ">=3.8"
+        dependencies = []
+        "#
+        })?;
+
+    let venv = context.temp_dir.child(".venv");
+    venv.child("pyvenv.cfg").write_str("")?;
+    let command = venv.child("bin").child("foo-command");
+    command.write_str("#!/bin/sh\n")?;
+    fs_err::set_permissions(command.path(), PermissionsExt::from_mode(0o755))?;
+
+    uv_snapshot!(
+        context.filters(),
+        context
+            .command()
+            .env("UV_COMPLETE", "zsh")
+            .env("_CLAP_COMPLETE_INDEX", "2")
+            .arg("--")
+            .arg("uv")
+            .arg("run")
+            .arg("foo"),
+        @r"
+    success: true
+    exit_code: 0
+    ----- stdout -----
+    foo-command
+    ----- stderr -----
+    "
+    );
+
+    Ok(())
+}
+
 /// Run a PEP 723-compatible script. The script should take precedence over the workspace
 /// dependencies.
 #[test]

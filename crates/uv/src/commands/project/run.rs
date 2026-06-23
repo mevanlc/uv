@@ -81,6 +81,43 @@ use crate::settings::{
     ResolverSettings,
 };
 
+pub(crate) fn executable_script_names(scripts: &Path) -> io::Result<Vec<String>> {
+    let scripts = match fs_err::read_dir(scripts) {
+        Ok(scripts) => scripts.into_iter().collect::<Result<Vec<_>, _>>()?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
+        Err(err) => return Err(err),
+    };
+
+    Ok(scripts
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .file_type()
+                .is_ok_and(|file_type| file_type.is_file() || file_type.is_symlink())
+        })
+        .map(|entry| entry.path())
+        .filter(|path| is_executable(path))
+        .map(|path| {
+            let path = if cfg!(windows)
+                && path
+                    .extension()
+                    .is_some_and(|exe| exe == std::env::consts::EXE_EXTENSION)
+            {
+                path.with_extension("")
+            } else {
+                path
+            };
+
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string()
+        })
+        .filter(|command| !command.starts_with("activate") && !command.starts_with("deactivate"))
+        .sorted()
+        .collect_vec())
+}
+
 /// Run a command.
 #[expect(clippy::fn_params_excessive_bools)]
 pub(crate) async fn run(
@@ -1210,43 +1247,7 @@ pub(crate) async fn run(
             "Provide a command or script to invoke with `uv run <command>` or `uv run <script>.py`.\n"
         )?;
 
-        let scripts = match fs_err::read_dir(interpreter.scripts()) {
-            Ok(scripts) => scripts.into_iter().collect::<Result<Vec<_>, _>>()?,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Vec::new(),
-            Err(err) => return Err(err.into()),
-        };
-
-        let commands = scripts
-            .into_iter()
-            .filter(|entry| {
-                entry
-                    .file_type()
-                    .is_ok_and(|file_type| file_type.is_file() || file_type.is_symlink())
-            })
-            .map(|entry| entry.path())
-            .filter(|path| is_executable(path))
-            .map(|path| {
-                let path = if cfg!(windows)
-                    && path
-                        .extension()
-                        .is_some_and(|exe| exe == std::env::consts::EXE_EXTENSION)
-                {
-                    // Remove the extensions.
-                    path.with_extension("")
-                } else {
-                    path
-                };
-
-                path.file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string()
-            })
-            .filter(|command| {
-                !command.starts_with("activate") && !command.starts_with("deactivate")
-            })
-            .sorted()
-            .collect_vec();
+        let commands = executable_script_names(interpreter.scripts())?;
 
         if !commands.is_empty() {
             writeln!(

@@ -1,12 +1,13 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 use std::borrow::Cow;
-use std::ffi::OsString;
+use std::collections::BTreeSet;
+use std::ffi::{OsStr, OsString};
 use std::fmt::Write;
 use std::io::stdout;
 #[cfg(feature = "self-update")]
 use std::ops::Bound;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::atomic::Ordering;
@@ -14,6 +15,8 @@ use std::sync::atomic::Ordering;
 use anyhow::{Result, anyhow, bail};
 use clap::error::{ContextKind, ContextValue};
 use clap::{CommandFactory, Parser};
+use clap_complete::engine::{CompletionCandidate, SubcommandCandidates};
+use clap_complete::env::Shells;
 use futures::FutureExt;
 use owo_colors::OwoColorize;
 use settings::PipTreeSettings;
@@ -58,6 +61,8 @@ use crate::settings::{
     PublishSettings, resolve_color,
 };
 
+const DYNAMIC_COMPLETION_ENV: &str = "UV_COMPLETE";
+
 pub(crate) mod child;
 pub(crate) mod commands;
 #[cfg(not(feature = "self-update"))]
@@ -88,6 +93,204 @@ impl uv_errors::Hint for ExternallyInstalledError {
         }
     }
 }
+
+fn dynamic_completion_command() -> clap::Command {
+    let mut command = Cli::command();
+
+    if let Some(run) = command.find_subcommand_mut("run") {
+        *run = run
+            .clone()
+            .add(SubcommandCandidates::new(run_command_completion_candidates));
+    }
+
+    command
+}
+
+fn run_command_completion_candidates() -> Vec<CompletionCandidate> {
+    let mut commands = BTreeSet::new();
+
+    for root in completion_environment_roots() {
+        let scripts = scripts_dir(&root);
+        if let Ok(names) = commands::executable_script_names(&scripts) {
+            commands.extend(names);
+        }
+    }
+
+    commands.into_iter().map(CompletionCandidate::new).collect()
+}
+
+fn completion_environment_roots() -> Vec<PathBuf> {
+    let words = completion_words();
+    let current_dir = std::env::current_dir().unwrap_or_else(|_| CWD.clone());
+    let working_dir = completion_working_dir(&words, &current_dir);
+    let active = has_completion_flag(&words, "--active");
+    let no_project = has_completion_flag(&words, "--no-project");
+
+    let mut roots = Vec::new();
+    if active {
+        roots.extend(active_virtual_environment());
+    }
+
+    if !no_project {
+        if let Some(project_dir) = completion_project_dir(&words, &working_dir) {
+            roots.push(project_dir.join(".venv"));
+        }
+    }
+
+    if !active {
+        roots.extend(active_virtual_environment());
+    }
+
+    if roots.is_empty() {
+        roots.extend(virtual_environment_from_working_dir(&working_dir));
+    }
+
+    let mut seen = BTreeSet::new();
+    roots
+        .into_iter()
+        .filter(|root| is_virtual_environment_root(root))
+        .filter(|root| seen.insert(root.clone()))
+        .collect()
+}
+
+fn completion_words() -> Vec<OsString> {
+    let mut args = std::env::args_os().skip_while(|arg| arg != "--");
+    if args.next().is_some() {
+        args.collect()
+    } else {
+        Vec::new()
+    }
+}
+
+fn completion_working_dir(words: &[OsString], current_dir: &Path) -> PathBuf {
+    completion_option_value(words, "--directory", Some("-C"))
+        .map(|directory| absolutize_completion_path(current_dir, directory))
+        .unwrap_or_else(|| current_dir.to_path_buf())
+}
+
+fn completion_project_dir(words: &[OsString], working_dir: &Path) -> Option<PathBuf> {
+    if let Some(project) = completion_option_value(words, "--project", None) {
+        let project = absolutize_completion_path(working_dir, project);
+        return if project
+            .file_name()
+            .is_some_and(|name| name == "pyproject.toml")
+        {
+            project.parent().map(Path::to_path_buf)
+        } else {
+            Some(project)
+        };
+    }
+
+    working_dir
+        .ancestors()
+        .find(|path| path.join("pyproject.toml").is_file())
+        .map(Path::to_path_buf)
+}
+
+fn completion_option_value(words: &[OsString], long: &str, short: Option<&str>) -> Option<PathBuf> {
+    for (index, word) in words.iter().enumerate() {
+        if let Some(value) = word
+            .to_str()
+            .and_then(|word| word.strip_prefix(&format!("{long}=")))
+        {
+            return Some(PathBuf::from(value));
+        }
+
+        if word == OsStr::new(long) {
+            return words.get(index + 1).map(PathBuf::from);
+        }
+
+        if let Some(short) = short {
+            if word == OsStr::new(short) {
+                return words.get(index + 1).map(PathBuf::from);
+            }
+
+            if let Some(value) = word.to_str().and_then(|word| word.strip_prefix(short))
+                && !value.is_empty()
+            {
+                return Some(PathBuf::from(value));
+            }
+        }
+    }
+
+    None
+}
+
+fn has_completion_flag(words: &[OsString], flag: &str) -> bool {
+    words.iter().any(|word| word == OsStr::new(flag))
+}
+
+fn active_virtual_environment() -> Option<PathBuf> {
+    std::env::var_os(EnvVars::VIRTUAL_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn virtual_environment_from_working_dir(working_dir: &Path) -> Option<PathBuf> {
+    for directory in working_dir.ancestors() {
+        if is_virtual_environment_root(directory) {
+            return Some(directory.to_path_buf());
+        }
+
+        let dot_venv = directory.join(".venv");
+        if is_virtual_environment_root(&dot_venv) {
+            return Some(dot_venv);
+        }
+    }
+
+    None
+}
+
+fn is_virtual_environment_root(root: &Path) -> bool {
+    root.join("pyvenv.cfg").is_file()
+}
+
+fn scripts_dir(root: &Path) -> PathBuf {
+    if cfg!(windows) {
+        root.join("Scripts")
+    } else {
+        root.join("bin")
+    }
+}
+
+fn absolutize_completion_path(base: &Path, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else {
+        base.join(path)
+    }
+}
+
+fn shell_name(shell: clap_complete_command::Shell) -> Option<&'static str> {
+    match shell {
+        clap_complete_command::Shell::Bash => Some("bash"),
+        clap_complete_command::Shell::Elvish => Some("elvish"),
+        clap_complete_command::Shell::Fish => Some("fish"),
+        clap_complete_command::Shell::PowerShell => Some("powershell"),
+        clap_complete_command::Shell::Zsh => Some("zsh"),
+        _ => None,
+    }
+}
+
+fn generate_dynamic_shell_completion(shell: clap_complete_command::Shell) -> Result<()> {
+    let Some(shell) = shell_name(shell) else {
+        bail!("Dynamic completion is not supported for the requested shell");
+    };
+    let shells = Shells::builtins();
+    let Some(completer) = shells.completer(shell) else {
+        bail!("Dynamic completion is not supported for `{shell}`");
+    };
+
+    completer.write_registration(
+        DYNAMIC_COMPLETION_ENV,
+        "uv",
+        "uv",
+        "uv",
+        &mut std::io::stdout(),
+    )?;
+    Ok(())
+}
+
 #[instrument(skip_all)]
 async fn run(cli: Cli) -> Result<ExitStatus> {
     // Enable flag to pick up warnings generated by workspace loading.
@@ -1449,7 +1652,11 @@ async fn run(cli: Cli) -> Result<ExitStatus> {
             .into());
         }
         Commands::GenerateShellCompletion(args) => {
-            args.shell.generate(&mut Cli::command(), &mut stdout());
+            if args.dynamic {
+                generate_dynamic_shell_completion(args.shell)?;
+            } else {
+                args.shell.generate(&mut Cli::command(), &mut stdout());
+            }
             Ok(ExitStatus::Success)
         }
         Commands::Tool(ToolNamespace {
@@ -2931,6 +3138,18 @@ where
 
     // `std::env::args` is not `Send` so we parse before passing to our runtime
     // https://github.com/rust-lang/rust/pull/48005
+    let args = args.into_iter().map(Into::into).collect::<Vec<OsString>>();
+
+    let current_dir = std::env::current_dir().ok();
+    if clap_complete::CompleteEnv::with_factory(dynamic_completion_command)
+        .var(DYNAMIC_COMPLETION_ENV)
+        .completer("uv")
+        .try_complete(args.clone(), current_dir.as_deref())
+        .unwrap_or_else(|err| err.exit())
+    {
+        return ExitCode::SUCCESS;
+    }
+
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(mut err) => {
